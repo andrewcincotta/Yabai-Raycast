@@ -3,8 +3,19 @@ import { useCallback, useEffect, useState } from "react";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { existsSync } from "fs";
+import { userInfo } from "os";
 
 const execAsync = promisify(exec);
+
+// Execute shell command with the USER environment variable set to support yabai socket communication
+async function execYabaiCommand(command: string) {
+  return execAsync(command, {
+    env: {
+      ...process.env,
+      USER: userInfo().username,
+    },
+  });
+}
 
 interface Preferences {
   yabaiPath?: string;
@@ -17,6 +28,13 @@ interface YabaiWindow {
   space: number;
   display: number;
   "is-minimized": boolean;
+  "is-floating": boolean;
+}
+
+interface YabaiSpace {
+  index: number;
+  "has-focus": boolean;
+  display: number;
 }
 
 // Resolve yabai path dynamically, checking preferences and standard installation directories
@@ -33,6 +51,18 @@ function getAbsoluteYabaiPath(prefPath: string | undefined): string {
   return "yabai"; // fallback hoping it is in standard PATH
 }
 
+// Query yabai to determine the space index currently focused by the user
+async function getActiveSpaceIndex(yabaiPath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execYabaiCommand(`${yabaiPath} -m query --spaces --space`);
+    const spaceInfo: YabaiSpace = JSON.parse(stdout.trim());
+    return spaceInfo.index;
+  } catch (error) {
+    console.error("Error querying active space index:", error);
+    return null;
+  }
+}
+
 export default function Command() {
   const { yabaiPath: prefYabaiPath } = getPreferenceValues<Preferences>();
   const yabaiPath = getAbsoluteYabaiPath(prefYabaiPath);
@@ -43,7 +73,7 @@ export default function Command() {
   const fetchMinimizedWindows = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { stdout } = await execAsync(`${yabaiPath} -m query --windows`);
+      const { stdout } = await execYabaiCommand(`${yabaiPath} -m query --windows`);
       const parsed: YabaiWindow[] = JSON.parse(stdout || "[]");
       const minimized = parsed.filter((win) => win["is-minimized"] === true);
       setWindows(minimized);
@@ -65,13 +95,34 @@ export default function Command() {
 
   async function deminimize(win: YabaiWindow) {
     try {
-      await execAsync(`${yabaiPath} -m window --deminimize ${win.id}`);
+      // Query the active space index before deminimizing
+      const activeSpaceIndex = await getActiveSpaceIndex(yabaiPath);
+
+      await execYabaiCommand(`${yabaiPath} -m window --deminimize ${win.id}`);
+
+      // If we found the active space, move the restored window to it
+      if (activeSpaceIndex !== null && win.space !== activeSpaceIndex) {
+        try {
+          await execYabaiCommand(`${yabaiPath} -m window ${win.id} --space ${activeSpaceIndex}`);
+        } catch (moveError) {
+          console.error(`Failed to move window ${win.id} to space ${activeSpaceIndex}:`, moveError);
+        }
+      }
 
       // Attempt to focus, but don't fail the operation if focus fails
       try {
-        await execAsync(`${yabaiPath} -m window --focus ${win.id}`);
+        await execYabaiCommand(`${yabaiPath} -m window --focus ${win.id}`);
       } catch (focusError) {
         console.error(`Failed to focus window ${win.id}:`, focusError);
+      }
+
+      // If the window is floating, toggle float off to tile it in yabai
+      if (win["is-floating"] === true) {
+        try {
+          await execYabaiCommand(`${yabaiPath} -m window ${win.id} --toggle float`);
+        } catch (floatError) {
+          console.error(`Failed to toggle float off for window ${win.id}:`, floatError);
+        }
       }
 
       await showToast({
