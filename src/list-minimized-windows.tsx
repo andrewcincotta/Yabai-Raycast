@@ -1,4 +1,14 @@
-import { ActionPanel, Action, List, Icon, showToast, Toast, getPreferenceValues, Keyboard } from "@raycast/api";
+import {
+  ActionPanel,
+  Action,
+  List,
+  Icon,
+  showToast,
+  Toast,
+  getPreferenceValues,
+  Keyboard,
+  getApplications,
+} from "@raycast/api";
 import { useCallback, useEffect, useState } from "react";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -69,6 +79,56 @@ export default function Command() {
 
   const [windows, setWindows] = useState<YabaiWindow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [appPaths, setAppPaths] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    async function loadApps() {
+      try {
+        const apps = await getApplications();
+        const map: Record<string, string> = {};
+        for (const app of apps) {
+          map[app.name] = app.path;
+        }
+        setAppPaths(map);
+      } catch (error) {
+        console.error("Failed to load applications:", error);
+      }
+    }
+    loadApps();
+  }, []);
+
+  const getAppIcon = useCallback(
+    (appName: string) => {
+      // 1. Check direct name match in apps list
+      const path = appPaths[appName];
+      if (path) {
+        return { fileIcon: path };
+      }
+
+      // 2. Case-insensitive lookup fallback
+      const lowerName = appName.toLowerCase();
+      const resolvedPath = Object.entries(appPaths).find(([name]) => name.toLowerCase() === lowerName)?.[1];
+      if (resolvedPath) {
+        return { fileIcon: resolvedPath };
+      }
+
+      // 3. Common fallback paths on macOS
+      const fallbackPaths = [
+        `/Applications/${appName}.app`,
+        `/System/Applications/${appName}.app`,
+        `/System/Applications/Utilities/${appName}.app`,
+      ];
+      for (const p of fallbackPaths) {
+        if (existsSync(p)) {
+          return { fileIcon: p };
+        }
+      }
+
+      // 4. Default generic icon if not found
+      return Icon.AppWindow;
+    },
+    [appPaths],
+  );
 
   const fetchMinimizedWindows = useCallback(async () => {
     setIsLoading(true);
@@ -180,7 +240,7 @@ export default function Command() {
         windows.map((win) => (
           <List.Item
             key={win.id}
-            icon={Icon.AppWindow}
+            icon={getAppIcon(win.app)}
             title={win.app}
             subtitle={win.title || "(untitled window)"}
             accessories={[{ text: `Space ${win.space}` }]}
