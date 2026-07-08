@@ -93,15 +93,21 @@ export default function Command() {
     fetchMinimizedWindows();
   }, [fetchMinimizedWindows]);
 
-  async function deminimize(win: YabaiWindow) {
+  async function deminimize(
+    win: YabaiWindow,
+    options: { moveToActiveSpace: boolean; tileWindow: boolean } = { moveToActiveSpace: true, tileWindow: true },
+  ) {
     try {
-      // Query the active space index before deminimizing
-      const activeSpaceIndex = await getActiveSpaceIndex(yabaiPath);
+      // Query the active space index if we want to move the window to active space
+      let activeSpaceIndex: number | null = null;
+      if (options.moveToActiveSpace) {
+        activeSpaceIndex = await getActiveSpaceIndex(yabaiPath);
+      }
 
       await execYabaiCommand(`${yabaiPath} -m window --deminimize ${win.id}`);
 
       // If we found the active space, move the restored window to it
-      if (activeSpaceIndex !== null && win.space !== activeSpaceIndex) {
+      if (options.moveToActiveSpace && activeSpaceIndex !== null && win.space !== activeSpaceIndex) {
         try {
           await execYabaiCommand(`${yabaiPath} -m window ${win.id} --space ${activeSpaceIndex}`);
         } catch (moveError) {
@@ -117,7 +123,7 @@ export default function Command() {
       }
 
       // If the window is floating, toggle float off to tile it in yabai
-      if (win["is-floating"] === true) {
+      if (options.tileWindow && win["is-floating"] === true) {
         try {
           await execYabaiCommand(`${yabaiPath} -m window ${win.id} --toggle float`);
         } catch (floatError) {
@@ -142,6 +148,26 @@ export default function Command() {
     }
   }
 
+  async function closeWindow(win: YabaiWindow) {
+    try {
+      await execYabaiCommand(`${yabaiPath} -m window ${win.id} --close`);
+      await showToast({
+        style: Toast.Style.Success,
+        title: "Closed window",
+        message: `${win.app} — ${win.title}`,
+      });
+      // Refresh the list so the closed window drops out of it.
+      fetchMinimizedWindows();
+    } catch (error) {
+      console.error(`Error closing window ${win.id}:`, error);
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to close window",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   return (
     <List isLoading={isLoading} searchBarPlaceholder="Filter minimized windows...">
       {!isLoading && windows.length === 0 ? (
@@ -160,13 +186,40 @@ export default function Command() {
             accessories={[{ text: `Space ${win.space}` }]}
             actions={
               <ActionPanel>
-                <Action title="Deminimize & Focus" icon={Icon.Eye} onAction={() => deminimize(win)} />
-                <Action
-                  title="Refresh"
-                  icon={Icon.ArrowClockwise}
-                  shortcut={Keyboard.Shortcut.Common.Refresh}
-                  onAction={fetchMinimizedWindows}
-                />
+                <ActionPanel.Section>
+                  <Action
+                    title="Deminimize & Focus"
+                    icon={Icon.Eye}
+                    onAction={() => deminimize(win, { moveToActiveSpace: true, tileWindow: true })}
+                  />
+                  <Action
+                    title="Deminimize (keep Floating)"
+                    icon={Icon.Window}
+                    shortcut={{ modifiers: ["opt"], key: "return" }}
+                    onAction={() => deminimize(win, { moveToActiveSpace: true, tileWindow: false })}
+                  />
+                  <Action
+                    title="Deminimize to Original Space"
+                    icon={Icon.ChevronLeft}
+                    shortcut={{ modifiers: ["shift"], key: "return" }}
+                    onAction={() => deminimize(win, { moveToActiveSpace: false, tileWindow: true })}
+                  />
+                </ActionPanel.Section>
+                <ActionPanel.Section>
+                  <Action
+                    title="Close Window"
+                    icon={Icon.Trash}
+                    style={Action.Style.Destructive}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "w" }}
+                    onAction={() => closeWindow(win)}
+                  />
+                  <Action
+                    title="Refresh List"
+                    icon={Icon.ArrowClockwise}
+                    shortcut={Keyboard.Shortcut.Common.Refresh}
+                    onAction={fetchMinimizedWindows}
+                  />
+                </ActionPanel.Section>
               </ActionPanel>
             }
           />
